@@ -1,0 +1,10 @@
+streamlit
+scikit-learn
+pandas
+numpy
+matplotlib
+xgboost
+scapy
+fastapi
+uvicorn
+psycopg2
