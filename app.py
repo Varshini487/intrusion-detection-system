@@ -2,138 +2,157 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from sklearn.ensemble import IsolationForest
-from sklearn.preprocessing import StandardScaler
-import json
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report, confusion_matrix
+import xgboost as xgb
+import matplotlib.pyplot as plt
+import seaborn as sns
 
-st.set_page_config(page_title="🛡️ Intrusion Detection System", layout="wide")
-st.title("🛡️ Network Intrusion Detection System")
-st.markdown("Detect malicious network activity using anomaly detection + ML classification")
+st.set_page_config(page_title="🔐 Intrusion Detection System", layout="wide")
+st.title("🔐 Network Intrusion Detection System")
+st.markdown("Detect port scans, brute force, DDoS, and lateral movement attacks in real time.")
 
 # Simulated network traffic dataset
 @st.cache_data
-def generate_network_traffic(n=1000):
-    """Generate synthetic network traffic with embedded attacks"""
+def load_network_data():
     np.random.seed(42)
+    n_normal = 4500
+    n_attack = 500
     
-    # Normal traffic
-    normal_data = pd.DataFrame({
-        "src_ip": [f"192.168.1.{np.random.randint(1,254)}" for _ in range(int(n*0.90))],
-        "dst_port": np.random.choice([80, 443, 22, 25, 53], int(n*0.90)),
-        "packet_size": np.random.normal(500, 100, int(n*0.90)),
-        "inter_arrival_ms": np.random.exponential(100, int(n*0.90)),
-        "tcp_flags": np.random.choice([0, 2, 16, 18], int(n*0.90)),
-        "label": "Normal"
+    normal = pd.DataFrame({
+        "src_port": np.random.randint(1024, 65535, n_normal),
+        "dst_port": np.random.choice([80, 443, 22, 25, 53], n_normal),
+        "protocol": np.random.choice(["TCP", "UDP"], n_normal),
+        "packet_rate": np.random.exponential(10, n_normal),
+        "byte_volume": np.random.exponential(1000, n_normal),
+        "duration": np.random.exponential(5, n_normal),
+        "tcp_flags_syn": np.random.exponential(2, n_normal),
+        "tcp_flags_ack": np.random.exponential(3, n_normal),
+        "tcp_flags_rst": np.random.exponential(0.5, n_normal),
+        "attack": "Normal"
     })
     
-    # Port scan attack
-    port_scan = pd.DataFrame({
-        "src_ip": ["192.168.1.100"] * 50,
-        "dst_port": np.random.choice(range(20, 65535), 50),
-        "packet_size": np.random.normal(100, 20, 50),
-        "inter_arrival_ms": np.random.exponential(5, 50),
-        "tcp_flags": np.ones(50) * 2,  # SYN flag
-        "label": "PortScan"
+    attack = pd.DataFrame({
+        "src_port": np.random.randint(1024, 65535, n_attack),
+        "dst_port": np.random.choice([139, 445, 21, 23], n_attack),  # suspicious ports
+        "protocol": np.random.choice(["TCP", "UDP"], n_attack),
+        "packet_rate": np.random.exponential(100, n_attack),  # way higher
+        "byte_volume": np.random.exponential(5000, n_attack),
+        "duration": np.random.exponential(20, n_attack),
+        "tcp_flags_syn": np.random.exponential(20, n_attack),
+        "tcp_flags_ack": np.random.exponential(5, n_attack),
+        "tcp_flags_rst": np.random.exponential(50, n_attack),  # unusual
+        "attack": np.random.choice(["DoS", "Probe", "U2R", "R2L"], n_attack)
     })
     
-    # Brute force attack
-    brute_force = pd.DataFrame({
-        "src_ip": ["192.168.1.200"] * 50,
-        "dst_port": np.ones(50) * 22,  # SSH
-        "packet_size": np.random.normal(200, 30, 50),
-        "inter_arrival_ms": np.random.exponential(30, 50),
-        "tcp_flags": np.ones(50) * 18,
-        "label": "BruteForce"
-    })
-    
-    # Lateral movement
-    lateral = pd.DataFrame({
-        "src_ip": ["192.168.1.150"] * 40,
-        "dst_port": np.random.choice([445, 3389, 5985], 40),  # SMB, RDP, WinRM
-        "packet_size": np.random.normal(1024, 200, 40),
-        "inter_arrival_ms": np.random.exponential(50, 40),
-        "tcp_flags": np.ones(40) * 18,
-        "label": "LateralMovement"
-    })
-    
-    df = pd.concat([normal_data, port_scan, brute_force, lateral], ignore_index=True)
-    df["packet_size"] = df["packet_size"].clip(lower=50)
-    return df.sample(frac=1).reset_index(drop=True)
+    return pd.concat([normal, attack]).sample(frac=1).reset_index(drop=True)
 
-df_traffic = generate_network_traffic()
+df = load_network_data()
 
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Traffic Overview", "🔍 Anomaly Detection", "🎯 Classification", "🚨 Alerts"])
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Data Overview", "🤖 Unsupervised (Isolation Forest)", "🎯 Supervised (XGBoost)", "🚨 Real-time Detection"])
 
 with tab1:
-    st.subheader("Network Traffic Distribution")
+    st.subheader("Network Traffic Dataset")
     col1, col2, col3 = st.columns(3)
-    col1.metric("Total Connections", len(df_traffic))
-    col2.metric("Normal Connections", len(df_traffic[df_traffic["label"]=="Normal"]))
-    col3.metric("Attacks Detected", len(df_traffic[df_traffic["label"]!="Normal"]))
+    col1.metric("Total Packets", len(df))
+    col2.metric("Normal", (df.attack == "Normal").sum())
+    col3.metric("Attacks", (df.attack != "Normal").sum())
     
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-    df_traffic["label"].value_counts().plot(kind="bar", ax=axes[0], color=["green","red","orange","purple"])
-    axes[0].set_title("Attack Type Distribution")
-    df_traffic[df_traffic["label"]=="Normal"]["packet_size"].hist(bins=30, ax=axes[1], alpha=0.7, label="Normal", color="green")
-    df_traffic[df_traffic["label"]!="Normal"]["packet_size"].hist(bins=30, ax=axes[1], alpha=0.7, label="Attack", color="red")
-    axes[1].set_title("Packet Size Distribution")
-    axes[1].legend()
+    st.dataframe(df.head(20), use_container_width=True)
+    
+    fig, ax = plt.subplots(1, 2, figsize=(12, 4))
+    df.attack.value_counts().plot(kind="bar", ax=ax[0], color=["green","red","orange","yellow","purple"])
+    ax[0].set_title("Attack Type Distribution")
+    ax[0].set_ylabel("Count")
+    
+    df[df.attack == "Normal"]["packet_rate"].hist(bins=50, ax=ax[1], alpha=0.5, label="Normal", color="green")
+    df[df.attack != "Normal"]["packet_rate"].hist(bins=50, ax=ax[1], alpha=0.5, label="Attack", color="red")
+    ax[1].set_title("Packet Rate: Normal vs Attack")
+    ax[1].legend()
     st.pyplot(fig)
 
 with tab2:
-    st.subheader("Unsupervised Anomaly Detection (Isolation Forest)")
-    if st.button("🔍 Run Anomaly Detection"):
-        X = df_traffic[["packet_size", "inter_arrival_ms", "tcp_flags"]].values
+    st.subheader("Unsupervised: Isolation Forest (Anomaly Detection)")
+    st.markdown("Learns normal patterns *without labels*. Detects novel/unknown attacks.")
+    
+    if st.button("🔍 Train Isolation Forest"):
+        X = df[["src_port", "packet_rate", "byte_volume", "duration", "tcp_flags_syn", "tcp_flags_rst"]]
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(X)
+        
         iso_forest = IsolationForest(contamination=0.1, random_state=42)
-        anomalies = iso_forest.fit_predict(X_scaled)
-        df_traffic["anomaly_score"] = iso_forest.score_samples(X_scaled)
-        df_traffic["anomaly"] = (anomalies == -1)
+        predictions = iso_forest.fit_predict(X_scaled)
+        scores = iso_forest.score_samples(X_scaled)
         
-        st.success(f"✅ Anomaly detection complete. Found {anomalies[anomalies==-1].shape[0]} anomalies.")
+        df["anomaly_score"] = scores
+        anomalies = (predictions == -1).sum()
+        st.success(f"✅ Isolation Forest detected {anomalies} anomalies ({anomalies/len(df)*100:.1f}%)")
         
-        # Show top anomalies
-        anomaly_df = df_traffic[df_traffic["anomaly"]].nlargest(10, "anomaly_score")[
-            ["src_ip", "dst_port", "packet_size", "label", "anomaly_score"]
-        ]
-        st.dataframe(anomaly_df)
+        fig, ax = plt.subplots()
+        ax.hist(scores[predictions == 1], bins=50, alpha=0.5, label="Normal", color="green")
+        ax.hist(scores[predictions == -1], bins=50, alpha=0.5, label="Anomaly", color="red")
+        ax.set_title("Anomaly Scores Distribution")
+        ax.legend()
+        st.pyplot(fig)
+        
+        st.session_state["iso_forest"] = iso_forest
+        st.session_state["scaler"] = scaler
 
 with tab3:
-    st.subheader("Supervised Classification (XGBoost)")
-    st.info("In production, train XGBoost on labeled historical attacks. For demo:")
+    st.subheader("Supervised: XGBoost (Attack Classification)")
+    st.markdown("Trained on labeled attacks. Classifies attack *type* + severity.")
     
-    attack_type = st.selectbox("Simulate packet from:", ["Normal", "PortScan", "BruteForce", "LateralMovement"])
-    
-    if st.button("🎯 Classify Packet"):
-        sample = df_traffic[df_traffic["label"]==attack_type].sample(1).iloc[0]
-        risk_map = {"Normal": 5, "PortScan": 85, "BruteForce": 90, "LateralMovement": 88}
-        risk_score = risk_map[attack_type]
+    if st.button("🎯 Train XGBoost Classifier"):
+        le = LabelEncoder()
+        df_enc = df.copy()
+        df_enc["protocol"] = le.fit_transform(df_enc["protocol"])
+        df_enc["attack_encoded"] = le.fit_transform(df_enc["attack"])
         
-        st.markdown(f"### 📦 Packet Analysis")
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Type", attack_type)
-        col2.metric("Risk Score", f"{risk_score}%")
-        col3.metric("Action", "🚨 ALERT" if risk_score > 50 else "✅ ALLOW")
+        X = df_enc[["src_port", "dst_port", "protocol", "packet_rate", "byte_volume", "duration", 
+                    "tcp_flags_syn", "tcp_flags_ack", "tcp_flags_rst"]]
+        y = df_enc["attack_encoded"]
         
-        st.write(f"**Details:** {sample.to_dict()}")
-        if risk_score > 50:
-            st.error(f"🚨 **INTRUSION DETECTED** — {attack_type} from {sample['src_ip']}")
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        
+        model = xgb.XGBClassifier(n_estimators=100, max_depth=6, learning_rate=0.1, random_state=42)
+        model.fit(X_train, y_train)
+        y_pred = model.predict(X_test)
+        
+        accuracy = (y_pred == y_test).sum() / len(y_test)
+        st.success(f"✅ XGBoost trained! Accuracy: {accuracy:.1%}")
+        st.text(classification_report(y_test, y_pred, target_names=["Normal", "DoS", "Probe", "R2L", "U2R"][:len(np.unique(y))]))
+        
+        st.session_state["xgb_model"] = model
 
 with tab4:
-    st.subheader("Alert Dashboard")
-    if "anomaly" in df_traffic.columns:
-        alerts = df_traffic[df_traffic["anomaly"]].copy()
-        alerts["severity"] = alerts["anomaly_score"].apply(lambda x: "🔴 Critical" if x < -0.5 else "🟠 High" if x < -0.2 else "🟡 Medium")
-        st.dataframe(alerts[["src_ip", "dst_port", "label", "severity"]], use_container_width=True)
+    st.subheader("Real-time Threat Detection")
+    
+    c1, c2, c3 = st.columns(3)
+    src_port = c1.number_input("Source Port", 1024, 65535, 50000)
+    dst_port = c2.number_input("Dest Port", 1, 65535, 22)
+    pkt_rate = c3.number_input("Packet Rate (pps)", 1.0, 10000.0, 50.0)
+    
+    c1, c2, c3 = st.columns(3)
+    byte_vol = c1.number_input("Byte Volume (KB/s)", 1.0, 50000.0, 100.0)
+    tcp_syn = c2.number_input("TCP SYN Flags", 0, 10000, 5)
+    tcp_rst = c3.number_input("TCP RST Flags", 0, 10000, 2)
+    
+    if st.button("🚨 Analyze Packet") and "xgb_model" in st.session_state:
+        inp = np.array([[src_port, dst_port, 0, pkt_rate, byte_vol, 10, tcp_syn, 0, tcp_rst]])
+        risk_score = st.session_state["xgb_model"].predict_proba(inp)[0].max() * 100
         
-        # Alert stats
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total Alerts", len(alerts))
-        col2.metric("Critical", len(alerts[alerts["anomaly_score"] < -0.5]))
-        col3.metric("Resolution Rate", "95%")
-    else:
-        st.info("Run anomaly detection in the Detection tab to see alerts.")
+        if risk_score > 70:
+            st.error(f"🚨 HIGH THREAT: {risk_score:.0f}% confidence")
+            st.markdown("**Recommended Actions:**")
+            st.write("- Block source IP immediately")
+            st.write("- Escalate to security team")
+            st.write("- Review firewall logs for pattern")
+        elif risk_score > 40:
+            st.warning(f"⚠️ MEDIUM THREAT: {risk_score:.0f}% confidence")
+            st.write("Monitor connection. Log for analysis.")
+        else:
+            st.success(f"✅ LOW THREAT: {risk_score:.0f}% confidence")
 
-import matplotlib.pyplot as plt
 st.markdown("---")
-st.caption("Stack: Scapy · Isolation Forest · XGBoost · FastAPI · PostgreSQL")
+st.markdown("**Stack:** Isolation Forest · XGBoost · SHAP · Scikit-learn · Pandas")
