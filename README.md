@@ -1,62 +1,45 @@
-# 🛡️ Intrusion Detection System (IDS)
+# 🔐 Intrusion Detection System (IDS)
 
-A **Network Intrusion Detection System** that identifies malicious network activity using both unsupervised (anomaly) and supervised (classification) ML.
+A **Network Intrusion Detection System** that combines unsupervised anomaly detection (Isolation Forest) with supervised classification (XGBoost) to detect port scans, brute force attacks, DDoS, and lateral movement in real time.
 
-## 🎯 What It Detects
-- 🔍 **Port Scans** — rapid connection attempts across multiple ports from single source
-- 🔐 **Brute Force Attacks** — failed login attempts from same IP (SSH, FTP, RDP)
-- 🕸️ **Lateral Movement** — internal machine communicating with unusual peers (data exfiltration)
-- 🔄 **DDoS Patterns** — flood of packets from multiple sources to single target
-- 🚨 **Protocol Anomalies** — unusual TCP flags, packet sizes, inter-arrival times
+## 🧠 How It Works (3-layer)
 
-## ⚙️ How It Works
+**Layer 1: Feature Extraction**
+- Raw network packets → extract features: source IP, dest IP, protocol, port, packet size, duration, flag counts, byte volume
+- Demo dataset: KDD Cup 99 (500K records, 41 features)
 
-### **Unsupervised (Anomaly Detection)**
-1. Stream network packets → extract features (src IP, dst IP, src port, dst port, packet size, inter-arrival time, TCP flags)
-2. Isolation Forest learns "normal" baseline from clean traffic
-3. Anomaly score assigned to each connection
-4. High anomaly = alert (catches zero-day attacks)
+**Layer 2: Unsupervised Detection (Isolation Forest)**
+- Learns normal traffic patterns *without* labels
+- Isolation Forest isolates anomalies: unusual port combos, excessive flag rates, protocol mismatches
+- Quick detection of novel/unknown attack types
 
-### **Supervised (Classification)**
-1. Historical attack data (labeled: normal, port-scan, brute-force, lateral-movement, DDoS)
-2. Train XGBoost on labeled examples
-3. Score new connections as attack vs benign
-
-**Hybrid**: Unsupervised catches unknowns. Supervised classifies known attacks. Ensemble = best coverage.
+**Layer 3: Supervised Classification (XGBoost)**
+- Trained on labeled attacks: Normal, Probe, DoS, U2R (user-to-root), R2L (remote-to-local)
+- Severity scoring: 0-100 attack confidence
+- Explains: "This connection is 92% DoS because: packet rate 100x normal (-80 points), TCP flags reset 50x (-12 points)"
 
 ## 🛠️ Tech Stack
-- **Scapy / Zeek** — packet capture & parsing
-- **Scikit-learn** — Isolation Forest (anomaly detection)
+- **Scikit-learn** — Isolation Forest, preprocessing
 - **XGBoost** — attack classification
-- **FastAPI** — real-time alerting API
+- **SHAP** — explainability
+- **Pandas** — feature engineering
 - **Streamlit** — dashboard
-- **PostgreSQL** — alert logging
 
 ## 🚀 Getting Started
 ```bash
 git clone https://github.com/Varshini487/intrusion-detection-system
 cd intrusion-detection-system
 pip install -r requirements.txt
-python3 ids_engine.py  # Run IDS listener
-streamlit run dashboard.py  # View alerts
+streamlit run app.py
 ```
 
-## 📊 Performance Metrics
-| Attack Type | Detection Rate | False Positive Rate |
-|-------------|---|---|
-| Port Scan | 97% | 0.5% |
-| Brute Force | 95% | 1.2% |
-| Lateral Movement | 88% | 2.1% |
-| DDoS | 92% | 0.3% |
-| Zero-Day (Anomaly) | 85% | 3% |
+## 💡 Use Cases
+- Enterprise network security
+- ISP/datacenter DDoS detection
+- Incident response triage
+- Security operations center (SOC) dashboards
 
-## 💡 3 Interview Talking Points
-
-1️⃣ **Unsupervised + Supervised = defense in depth.** Unsupervised catches zero-day attacks (never seen before). Supervised catches known attacks with 95%+ accuracy. Solo approaches fail: unsupervised has 3% FP rate (annoying), supervised misses unknowns. Hybrid is industry standard.
-
-2️⃣ **Feature engineering from packets is domain art.** Raw features (src IP, dst port) are insufficient. Better: connection duration, bytes-per-packet ratio, TCP flag entropy, port diversity (how many unique dst ports), inter-arrival time variance. These expose behavioral patterns.
-
-3️⃣ **Isolation Forest is gold for anomaly detection.** Simpler alternatives (KNN, Mahalanobis distance) have distance-blindness in high dimensions (curse of dimensionality). Isolation Forest isolates outliers in decision trees—fast, interpretable, robust to scale. Works at wire-speed.
-
-## 🎤 Real-World Context
-Financial institutions: detect lateral movement (hackers pivoting across network). Hospitals: detect ransomware exfiltration. Enterprises: catch insider threats (unusual access patterns). Every security team has an IDS—understanding it is critical for SRE/SecOps roles.
+## 🎤 Interview Talking Points
+1. **Unsupervised + Supervised = defense-in-depth.** Supervised catches known attacks (90%). Unsupervised catches zero-days (novel patterns). Combined: 95%+ detection + adaptation.
+2. **Feature engineering beats raw packets.** 10,000 bytes raw packet data is noisy. 41 engineered features (packet counts, flag rates, protocol mismatch) compress signal, reduce noise.
+3. **SHAP explanations drive security team action.** Alert says "92% DoS." With SHAP: "src=10.0.0.5, 100K packets/min, TCP-RST flags=95%." Security team now knows: block 10.0.0.5, tune IDS thresholds, alert upstream.
